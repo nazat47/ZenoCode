@@ -18,8 +18,11 @@
     "@opentui/core": "^0.4.3",
     "@opentui/react": "^0.4.3",
     "@zenocode/shared": "workspace:*",
+    "@zenocode/database": "workspace:*",
+    "eventsource-parser": "^3.1.0",
     "hono": "^4.12.30",
     "opentui-spinner": "^0.0.7",
+    "pretty-ms": "^9.3.0",
     "react": "^19.2.6",
     "react-router": "^8.2.0",
     "zod": "^4.4.3"
