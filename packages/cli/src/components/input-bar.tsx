@@ -1,7 +1,7 @@
 import { TextareaRenderable, type KeyBinding } from "@opentui/core";
 import { StatusBar } from "./status-bar";
 import { useCallback, useEffect, useRef } from "react";
-import { useRenderer } from "@opentui/react";
+import { useKeyboard, useRenderer } from "@opentui/react";
 import { useCommandMenu } from "./commands-menu/use-command-menu";
 import type { Command } from "./commands-menu/types";
 import { CommandMenu } from "./commands-menu";
@@ -9,6 +9,9 @@ import { useToast } from "../providers/toast";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { useDialog } from "../providers/dialog";
 import { useTheme } from "../providers/theme";
+import { useNavigate } from "react-router";
+import { usePromptConfig } from "../providers/prompt-config";
+import { Mode } from "@zenocode/database/enums";
 
 type Props = {
   onSubmit: (text: string) => void;
@@ -30,6 +33,8 @@ export function InputBar({ onSubmit, disabled = false }: Props) {
   const dialog = useDialog();
   const { colors } = useTheme();
   const { isTopLayer, setResponder } = useKeyboardLayer();
+  const navigate = useNavigate();
+  const { mode, model, setMode, setModel, toggleMode } = usePromptConfig();
   const {
     showCommandMenu,
     commandQuery,
@@ -70,12 +75,16 @@ export function InputBar({ onSubmit, disabled = false }: Props) {
           exit: () => renderer.destroy(),
           toast,
           dialog,
+          navigate,
+          mode,
+          setMode,
+          setModel,
         });
       } else {
         text.insertText(command.value + " ");
       }
     },
-    [renderer, toast],
+    [renderer, toast, navigate, dialog, mode, setMode, setModel],
   );
 
   const handleSubmit = useCallback(() => {
@@ -106,6 +115,15 @@ export function InputBar({ onSubmit, disabled = false }: Props) {
     [resolveCommand, handleCommand],
   );
 
+  useKeyboard((key) => {
+    if (disabled) return;
+    if (!isTopLayer("base")) return;
+    if (key.name === "tab") {
+      key.preventDefault();
+      toggleMode();
+    }
+  });
+
   useEffect(() => {
     setResponder("base", () => {
       if (disabled) return false;
@@ -122,7 +140,11 @@ export function InputBar({ onSubmit, disabled = false }: Props) {
 
   return (
     <box width={"100%"} alignItems="center" paddingX={2}>
-      <box width={"100%"} border={["left"]} borderColor={colors.primary}>
+      <box
+        width={"100%"}
+        border={["left"]}
+        borderColor={mode === Mode.BUILD ? colors.primary : colors.planMode}
+      >
         <box
           position="relative"
           justifyContent="center"

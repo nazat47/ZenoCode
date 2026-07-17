@@ -1,4 +1,10 @@
-import { ThemeDialogContent } from "../dialogs";
+import { SUPPORTED_CHAT_MODELS } from "@zenocode/shared";
+import {
+  AgentsDialogContent,
+  ModelsDialogContent,
+  SessionDialogContent,
+  ThemeDialogContent,
+} from "../dialogs";
 import type { Command, CommandContext } from "./types";
 
 export const COMMMANDS: Command[] = [
@@ -7,7 +13,7 @@ export const COMMMANDS: Command[] = [
     description: "Start a new conversation",
     value: "/new",
     action: (ctx) => {
-      ctx.toast.show({ message: "Starting a new conversation" });
+      ctx.navigate("/");
     },
   },
   {
@@ -15,7 +21,10 @@ export const COMMMANDS: Command[] = [
     description: "Show recent conversations",
     value: "/sessions",
     action: (ctx) => {
-      ctx.toast.show({ message: "Showing recent conversations" });
+      ctx.dialog.open({
+        title: "Select sessions",
+        children: <SessionDialogContent />,
+      });
     },
   },
   {
@@ -25,7 +34,12 @@ export const COMMMANDS: Command[] = [
     action: (ctx) => {
       ctx.dialog.open({
         title: "Select Model",
-        children: <text>Model selection coming soon...</text>,
+        children: (
+          <ModelsDialogContent
+            models={SUPPORTED_CHAT_MODELS.map((model) => model.id)}
+            onSelectModel={ctx.setModel}
+          />
+        ),
       });
     },
   },
@@ -35,8 +49,13 @@ export const COMMMANDS: Command[] = [
     value: "/agents",
     action: (ctx) => {
       ctx.dialog.open({
-        title: "Select mode",
-        children: <text>Agent selection coming soon...</text>,
+        title: "Select agents",
+        children: (
+          <AgentsDialogContent
+            currentMode={ctx.mode}
+            onSelectMode={ctx.setMode}
+          />
+        ),
       });
     },
   },
