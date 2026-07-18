@@ -11,7 +11,19 @@ import { use, useCallback, useEffect, useRef, useState } from "react";
 import { getErrorMessage } from "../lib/http-errors";
 import { apiClient } from "../lib/api-client";
 
-export type ClientMessagePart = { type: "text"; text: string };
+export type ClientMessagePart =
+  | { type: "text"; text: string }
+  | ClientToolCallPart
+  | { type: "reasoning"; text: string };
+
+export type ClientToolCallPart = {
+  type: "tool-call";
+  id: string;
+  name: string;
+  result?: string;
+  status: "done" | "calling";
+  args: Record<string, unknown>;
+};
 
 export type Message =
   | {
@@ -189,7 +201,7 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
         }
 
         switch (event.type) {
-          case "text-delta":
+          case "reasoning-delta": {
             const last = parts[parts.length - 1];
             if (last && last.type === "text") {
               last.text += event.text;
@@ -198,7 +210,42 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
             }
             emitParts(activeStream.requestId, parts);
             break;
-          case "done":
+          }
+          case "text-delta": {
+            const last = parts[parts.length - 1];
+            if (last && last.type === "text") {
+              last.text += event.text;
+            } else {
+              parts.push({ type: "text", text: event.text });
+            }
+            emitParts(activeStream.requestId, parts);
+            break;
+          }
+          case "tool-call": {
+            parts.push({
+              type: "tool-call",
+              id: event.toolCallId,
+              name: event.toolName,
+              args: event.args,
+              status: "calling",
+            });
+            emitParts(activeStream.requestId, parts);
+            break;
+          }
+          case "tool-result": {
+            const tc = parts.find(
+              (p): p is ClientToolCallPart =>
+                p.type === "tool-call" && p.id === event.toolCallId,
+            );
+
+            if (tc) {
+              tc.status = "done";
+              tc.result = event.result;
+            }
+            emitParts(activeStream.requestId, parts);
+            break;
+          }
+          case "done": {
             if (!isActiveRequest(activeStream.requestId)) return;
 
             const fullText = parts
@@ -219,7 +266,8 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
               },
             ]);
             break;
-          case "error":
+          }
+          case "error": {
             updateMessages((prev) => [
               ...prev,
               {
@@ -229,6 +277,7 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
               },
             ]);
             break;
+          }
         }
       }
     },

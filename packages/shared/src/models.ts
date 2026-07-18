@@ -46,7 +46,7 @@ export const SUPPORTED_CHAT_MODELS = [
   },
 
   {
-    id: "gpt-5.4-mini",
+    id: "gpt-5.4",
     provider: "openai",
     pricing: {
       inputUsdPerMillionTokens: 0.75,
