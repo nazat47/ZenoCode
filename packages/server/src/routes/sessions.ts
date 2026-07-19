@@ -6,6 +6,7 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import z from "zod";
 import * as Sentry from "@sentry/hono/bun";
+import type { AuthenticatedEnv } from "../middleware/require-auth";
 
 const createSessionSchema = z.object({
   title: z.string().min(3, "Title must be at least 3 characters"),
@@ -36,9 +37,11 @@ const createSessionValidator = zValidator(
   },
 );
 
-const app = new Hono()
+const app = new Hono<AuthenticatedEnv>()
   .get("/", async (c) => {
+    const userId = c.get("userId");
     const result = await db.session.findMany({
+      where: { userId },
       orderBy: { createdAt: "desc" },
       select: {
         id: true,
@@ -50,8 +53,9 @@ const app = new Hono()
   })
   .get("/:id", async (c) => {
     const id = c.req.param("id");
+    const userId = c.get("userId");
     const session = await db.session.findUnique({
-      where: { id },
+      where: { id, userId },
       include: {
         messages: { orderBy: { createdAt: "asc" } },
       },
@@ -67,11 +71,12 @@ const app = new Hono()
   })
   .post("/", createSessionValidator, async (c) => {
     const { initialMessage, ...data } = c.req.valid("json");
+    const userId = c.get("userId");
 
     const session = await db.session.create({
       data: {
         ...data,
-        userId: "mock-user",
+        userId,
         ...(initialMessage && {
           messages: {
             create: {

@@ -2,8 +2,10 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import sessions from "./routes/sessions";
 import chat from "./routes/chat";
+import auth from "./routes/auth";
 import { sentry } from "@sentry/hono/bun";
 import * as Sentry from "@sentry/hono/bun";
+import { requiredAuth } from "./middleware/require-auth";
 
 const app = new Hono();
 
@@ -45,7 +47,13 @@ app.onError((error, c) => {
   return c.json({ error: "Internal Server Error" }, 500);
 });
 
-const routes = app.route("/sessions", sessions).route("/chat", chat);
+app.use("/sessions/*", requiredAuth);
+app.use("/chat/*", requiredAuth);
+
+const routes = app
+  .route("/sessions", sessions)
+  .route("/chat", chat)
+  .route("/auth", auth);
 
 export type AppType = typeof routes;
 
