@@ -1,12 +1,12 @@
 import { zValidator } from "@hono/zod-validator";
 import { db } from "@zenocode/database/client";
-import { findSupportedChatModel } from "@zenocode/shared";
 import { Role, Mode, MessageStatus } from "@zenocode/database/enums";
 import { Hono } from "hono";
-import { HTTPException } from "hono/http-exception";
 import z from "zod";
 import * as Sentry from "@sentry/hono/bun";
 import type { AuthenticatedEnv } from "../middleware/require-auth";
+import { isSupportedChatModel } from "../lib/models";
+import { requireCredits } from "../middleware/require-credits";
 
 const createSessionSchema = z.object({
   title: z.string().min(3, "Title must be at least 3 characters"),
@@ -16,9 +16,7 @@ const createSessionSchema = z.object({
       content: z.string().min(3, "Message must be at least 3 characters"),
       role: z.enum(Role),
       mode: z.enum(Mode),
-      model: z
-        .string()
-        .refine((id) => !!findSupportedChatModel(id), "Unsupported model"),
+      model: z.string().refine(isSupportedChatModel, "Unsupported model"),
     })
     .optional(),
 });
@@ -69,7 +67,7 @@ const app = new Hono<AuthenticatedEnv>()
     }
     return c.json(session);
   })
-  .post("/", createSessionValidator, async (c) => {
+  .post("/", requireCredits, createSessionValidator, async (c) => {
     const { initialMessage, ...data } = c.req.valid("json");
     const userId = c.get("userId");
 
