@@ -1,14 +1,15 @@
-import { Mode } from "@zenocode/database/enums";
 import {
   DEFAULT_CHAT_MODEL_ID,
   type SupportedChatModelId,
+  type ModeType,
+  Mode,
 } from "@zenocode/shared";
 import { createContext, useCallback, useContext, useState } from "react";
 
 type PromptConfigContextValue = {
-  mode: Mode;
+  mode: ModeType;
   model: SupportedChatModelId;
-  setMode: (mode: Mode) => void;
+  setMode: (mode: ModeType) => void;
   setModel: (mode: SupportedChatModelId) => void;
   toggleMode: () => void;
 };
@@ -35,7 +36,7 @@ export const PromptConfigProvider = ({
   const [model, setModel] = useState<SupportedChatModelId>(
     DEFAULT_CHAT_MODEL_ID,
   );
-  const [mode, setMode] = useState<Mode>(Mode.BUILD);
+  const [mode, setMode] = useState<ModeType>(Mode.BUILD);
 
   const toggleMode = useCallback(() => {
     setMode((prev) => (prev === Mode.BUILD ? Mode.PLAN : Mode.BUILD));

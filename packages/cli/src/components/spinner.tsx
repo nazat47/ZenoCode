@@ -1,8 +1,8 @@
 import "opentui-spinner/react";
 import { useTheme } from "../providers/theme";
-import { Mode } from "@zenocode/database/enums";
+import { type ModeType, Mode } from "@zenocode/shared";
 
-const Spinner = ({ mode = Mode.BUILD }: { mode?: Mode }) => {
+const Spinner = ({ mode = Mode.BUILD }: { mode?: ModeType }) => {
   const { colors } = useTheme();
   const activeColor = mode === Mode.BUILD ? colors.primary : colors.planMode;
 

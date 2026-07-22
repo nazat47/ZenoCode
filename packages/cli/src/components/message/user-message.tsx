@@ -1,7 +1,13 @@
-import { Mode } from "@zenocode/database/enums";
+import { Mode, type ModeType } from "@zenocode/shared";
 import { useTheme } from "../../providers/theme";
 
-const UserMessage = ({ message, mode }: { message: string; mode: Mode }) => {
+const UserMessage = ({
+  message,
+  mode,
+}: {
+  message: string;
+  mode: ModeType;
+}) => {
   const { colors } = useTheme();
   return (
     <box width={"100%"} alignItems="center">

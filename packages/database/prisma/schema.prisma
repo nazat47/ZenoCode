@@ -7,47 +7,13 @@ datasource db {
   provider = "postgresql"
 }
 
-enum Role {
-  USER
-  ASSISTANT
-  ERROR
-}
-
-enum Mode {
-  BUILD
-  PLAN
-}
-
-enum MessageStatus {
-  COMPLETE
-  INTERRUPTED
-}
-
 model Session {
-  id        String    @id @default(cuid())
+  id        String   @id @default(cuid())
   title     String
-  cwd       String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
   userId    String?
-  messages  Message[]
+  messages  Json     @default("[]")
 
   @@index([userId])
-}
-
-model Message {
-  id        String        @id @default(cuid())
-  role      Role
-  content   String
-  mode      Mode
-  model     String
-  parts     Json?
-  status    MessageStatus
-  duration  Int?
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
-  sessionId String
-  session   Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-
-  @@index([sessionId])
 }

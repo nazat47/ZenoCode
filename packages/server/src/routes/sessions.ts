@@ -1,24 +1,13 @@
 import { zValidator } from "@hono/zod-validator";
 import { db } from "@zenocode/database/client";
-import { Role, Mode, MessageStatus } from "@zenocode/database/enums";
 import { Hono } from "hono";
 import z from "zod";
 import * as Sentry from "@sentry/hono/bun";
 import type { AuthenticatedEnv } from "../middleware/require-auth";
-import { isSupportedChatModel } from "../lib/models";
 import { requireCredits } from "../middleware/require-credits";
 
 const createSessionSchema = z.object({
   title: z.string().min(3, "Title must be at least 3 characters"),
-  cwd: z.string().optional(),
-  initialMessage: z
-    .object({
-      content: z.string().min(3, "Message must be at least 3 characters"),
-      role: z.enum(Role),
-      mode: z.enum(Mode),
-      model: z.string().refine(isSupportedChatModel, "Unsupported model"),
-    })
-    .optional(),
 });
 
 const createSessionValidator = zValidator(
@@ -54,9 +43,6 @@ const app = new Hono<AuthenticatedEnv>()
     const userId = c.get("userId");
     const session = await db.session.findUnique({
       where: { id, userId },
-      include: {
-        messages: { orderBy: { createdAt: "asc" } },
-      },
     });
     if (!session) {
       Sentry.logger.error("Session not found", {
@@ -68,23 +54,14 @@ const app = new Hono<AuthenticatedEnv>()
     return c.json(session);
   })
   .post("/", requireCredits, createSessionValidator, async (c) => {
-    const { initialMessage, ...data } = c.req.valid("json");
+    const data = c.req.valid("json");
     const userId = c.get("userId");
 
     const session = await db.session.create({
       data: {
         ...data,
         userId,
-        ...(initialMessage && {
-          messages: {
-            create: {
-              ...initialMessage,
-              status: MessageStatus.COMPLETE,
-            },
-          },
-        }),
       },
-      include: { messages: true },
     });
 
     Sentry.logger.info("Session created successfully", {

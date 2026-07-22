@@ -1,11 +1,10 @@
-import { Mode } from "@zenocode/database/enums";
+import type { ModeType } from "@zenocode/shared";
 
 type SystemPromptParams = {
-  cwd: string | null;
-  mode: Mode;
+  mode: ModeType;
 };
 
-export function buildSystemPrompt({ cwd, mode }: SystemPromptParams): string {
+export function buildSystemPrompt({ mode }: SystemPromptParams): string {
   const parts: string[] = [];
 
   parts.push(
@@ -17,11 +16,7 @@ export function buildSystemPrompt({ cwd, mode }: SystemPromptParams): string {
         `,
   );
 
-  if (cwd) {
-    parts.push(`\nThe user's project directory is: ${cwd}`);
-  }
-
-  if (mode === Mode.PLAN) {
+  if (mode === "PLAN") {
     parts.push(
       `
         ## Mode: PLAN
@@ -47,7 +42,7 @@ export function buildSystemPrompt({ cwd, mode }: SystemPromptParams): string {
     );
   }
 
-  if (cwd && mode === Mode.PLAN) {
+  if (mode === "PLAN") {
     parts.push(
       `
       ## Tool Usage
@@ -66,7 +61,7 @@ export function buildSystemPrompt({ cwd, mode }: SystemPromptParams): string {
     );
   }
 
-  if (mode === Mode.BUILD) {
+  if (mode === "BUILD") {
     parts.push(
       `
       ## Tool Usage

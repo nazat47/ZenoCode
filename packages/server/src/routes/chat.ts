@@ -1,33 +1,57 @@
-import { zValidator } from "@hono/zod-validator";
-import { MessageStatus, Mode } from "@zenocode/database/enums";
 import {
-  streamText as aiStreamText,
-  stepCountIs,
+  getToolContracts,
+  modeSchema,
+  type ModeType,
+  type ToolContracts,
+} from "@zenocode/shared";
+import {
+  convertToModelMessages,
+  streamText,
+  validateUIMessages,
+  type InferUITools,
   type LanguageModelUsage,
+  type UIMessage,
 } from "ai";
-import { Hono } from "hono";
-import { streamSSE } from "hono/streaming";
 import z from "zod";
 import { isSupportedChatModel, resolveChatModel } from "../lib/models";
-import {
-  type ChatStreamEvent,
-  type MessagePart,
-  messagePartsSchema,
-  toolCallArgsSchema,
-} from "@zenocode/shared";
-import { db } from "@zenocode/database/client";
-import type { Prisma } from "@zenocode/database";
-import { createTools } from "../tools";
-import { buildSystemPrompt } from "../system-prompt";
+import { zValidator } from "@hono/zod-validator";
+import { Hono } from "hono";
 import type { AuthenticatedEnv } from "../middleware/require-auth";
+import { requireCredits } from "../middleware/require-credits";
+import { db } from "@zenocode/database/client";
+import { buildSystemPrompt } from "../system-prompt";
+import type { Prisma } from "../../../database/generated/prisma/client";
 import { calculateCreditsForUsage } from "../lib/credits";
 import { IngestAIUsage } from "../lib/polar";
-import { requireCredits } from "../middleware/require-credits";
+
+type ChatMessageMetadata = {
+  mode?: ModeType;
+  model?: string;
+  durationMs?: number;
+  usage?: LanguageModelUsage;
+};
+
+type ZenocodeUIMessage = UIMessage<
+  ChatMessageMetadata,
+  never,
+  InferUITools<ToolContracts>
+>;
 
 const submitSchema = z.object({
-  content: z.string(),
-  mode: z.enum(Mode),
-  model: z.string().refine(isSupportedChatModel, "Unsupported model"),
+  id: z.string(),
+  messages: z
+    .array(
+      z.custom<ZenocodeUIMessage>(
+        (val) =>
+          val !== null &&
+          typeof val === "object" &&
+          "id" in val &&
+          "parts" in val,
+      ),
+    )
+    .min(1),
+  mode: modeSchema,
+  model: z.string().refine(isSupportedChatModel, "unsupported model"),
 });
 
 const submitValidator = zValidator("json", submitSchema, (res, c) => {
@@ -36,470 +60,128 @@ const submitValidator = zValidator("json", submitSchema, (res, c) => {
   }
 });
 
-const activeResumeSessionIds = new Set<string>();
-
-function buildConversationHistory(
-  messages: {
-    role: "USER" | "ASSISTANT" | "ERROR";
-    content: string;
-    status: MessageStatus;
-  }[],
-) {
-  return messages.flatMap((m) => {
-    if (m.role === "ERROR") return [];
-    if (m.role === "ASSISTANT" && m.content.length === 0) return [];
-    return [
-      {
-        role: m.role === "USER" ? ("user" as const) : ("assistant" as const),
-        content: m.content,
-      },
-    ];
+const hasPendingToolCalls = (message: ZenocodeUIMessage) => {
+  return message.parts.some((part) => {
+    if (part.type === "dynamic-tool" || part.type.startsWith("tool-")) {
+      const state = (part as { state?: string }).state;
+      return state !== "output-available" && state !== "output-error";
+    }
+    return false;
   });
-}
-
-function getResumableUserMessage(
-  messages: {
-    role: "USER" | "ASSISTANT" | "ERROR";
-    model: string;
-    mode: Mode;
-  }[],
-) {
-  const lastMessage = messages[messages.length - 1];
-  if (!lastMessage || lastMessage.role !== "USER") {
-    return null;
-  }
-
-  return lastMessage;
-}
-
-type StreamParams = {
-  sessionId: string;
-  userId: string;
-  model: string;
-  history: { role: "user" | "assistant"; content: string }[];
-  mode: Mode;
-  abortController: AbortController;
-  cwd: string | null;
 };
 
-type IngestUsageForMessageParams = {
-  messageId: string;
-  status: "complete" | "interrupted";
-};
-
-async function streamAIResponse(
-  stream: Parameters<Parameters<typeof streamSSE>[1]>[0],
-  params: StreamParams,
-) {
-  const { sessionId, model, history, userId, mode, abortController, cwd } =
-    params;
-  const startTime = Date.now();
-  const parts: MessagePart[] = [];
-  const resolvedModel = resolveChatModel(model);
-  let completedUsage: LanguageModelUsage | null = null;
-
-  let fullText = "";
-  const tools = cwd ? createTools(cwd, mode) : undefined;
-
-  const persistInterruptedMessage = async () => {
-    const fullText = parts
-      .filter((p) => p.type === "text")
-      .map((p) => p.text)
-      .join("");
-
-    if (fullText.length === 0 && parts.length === 0) return;
-
-    const elapsedMs = Date.now() - startTime;
-
-    const validatedParts: Prisma.InputJsonValue | undefined =
-      parts.length > 0 ? messagePartsSchema.parse(parts) : undefined;
-
-    return db.message.create({
-      data: {
-        sessionId,
-        role: "ASSISTANT" as const,
-        model,
-        mode,
-        parts: validatedParts,
-        status: MessageStatus.INTERRUPTED,
-        content: fullText,
-        duration: Math.round(elapsedMs / 1000),
-      },
-    });
-  };
-
-  const ingestUsageForMessage = async ({
-    messageId,
-    status,
-  }: IngestUsageForMessageParams) => {
-    if (!completedUsage) return null;
-
-    try {
-      const billableUsage = calculateCreditsForUsage({
-        provider: resolvedModel.provider,
-        model: resolvedModel.modelId,
-        usage: completedUsage,
-      });
-
-      await IngestAIUsage({
-        externalCustomerId: userId,
-        eventId: `chat-message-${messageId}`,
-        credits: billableUsage.credits,
-      });
-    } catch (error) {
-      console.error("Failed to ingest usage", error);
-    }
-  };
-
-  const persistInterruptedMessageAndUsage = async () => {
-    const interruptedMessage = await persistInterruptedMessage();
-    if (!interruptedMessage) return;
-
-    await ingestUsageForMessage({
-      messageId: interruptedMessage.id,
-      status: "interrupted",
-    });
-  };
-
-  try {
-    const result = aiStreamText({
-      model: resolvedModel.model,
-      messages: history,
-      abortSignal: abortController.signal,
-      providerOptions: resolvedModel.providerOptions,
-      tools,
-      system: buildSystemPrompt({ cwd, mode }),
-      stopWhen: tools ? stepCountIs(50) : undefined,
-      onFinish(event) {
-        completedUsage = event.usage;
-      },
-    });
-
-    for await (const part of result.stream) {
-      if (stream.aborted) {
-        break;
-      }
-
-      if (part.type === "reasoning-delta") {
-        const last = parts[parts.length - 1];
-        if (last && last.type === "reasoning") {
-          last.text += part.text;
-        } else {
-          parts.push({ type: "reasoning", text: part.text });
-        }
-
-        const event: ChatStreamEvent = {
-          type: "reasoning-delta",
-          text: part.text,
-        };
-
-        await stream.writeSSE({
-          event: "reasoning-delta",
-          data: JSON.stringify(event),
-        });
-      }
-
-      if (part.type === "text-delta") {
-        const last = parts[parts.length - 1];
-        if (last && last.type === "text") {
-          last.text += part.text;
-        } else {
-          parts.push({ type: "text", text: part.text });
-        }
-
-        const event: ChatStreamEvent = { type: "text-delta", text: part.text };
-
-        await stream.writeSSE({
-          event: "text-delta",
-          data: JSON.stringify(event),
-        });
-      }
-
-      if (part.type === "tool-call") {
-        const args = toolCallArgsSchema.parse(part.input);
-
-        parts.push({
-          type: "tool-call",
-          id: part.toolCallId,
-          name: part.toolName,
-          args,
-        });
-
-        const event: ChatStreamEvent = {
-          type: "tool-call",
-          toolCallId: part.toolCallId,
-          toolName: part.toolName,
-          args,
-        };
-
-        await stream.writeSSE({
-          event: "tool-call",
-          data: JSON.stringify(event),
-        });
-      }
-
-      if (part.type === "tool-result") {
-        const resultStr =
-          typeof part.output === "string"
-            ? part.output
-            : JSON.stringify(part.output);
-
-        const tcPart = parts.find(
-          (p): p is Extract<MessagePart, { type: "tool-call" }> => {
-            return p.type === "tool-call" && p.id === part.toolCallId;
-          },
-        );
-
-        if (tcPart) {
-          tcPart.result = resultStr;
-        }
-
-        const event: ChatStreamEvent = {
-          type: "tool-result",
-          toolCallId: part.toolCallId,
-          result: resultStr,
-        };
-
-        await stream.writeSSE({
-          event: "tool-result",
-          data: JSON.stringify(event),
-        });
-      }
-
-      if (part.type === "error") {
-        throw part.error;
-      }
-    }
-
-    if (stream.aborted || abortController.signal.aborted) {
-      await persistInterruptedMessageAndUsage();
-      return;
-    }
-
-    const elapsedMs = Date.now() - startTime;
-
-    const fullText = parts
-      .filter((p) => p.type === "text")
-      .map((p) => p.text)
-      .join("");
-
-    const validatedParts: Prisma.InputJsonValue | undefined =
-      parts.length > 0 ? messagePartsSchema.parse(parts) : undefined;
-
-    const assistantMessage = await db.message.create({
-      data: {
-        sessionId,
-        role: "ASSISTANT",
-        status: MessageStatus.COMPLETE,
-        model,
-        content: fullText,
-        parts: validatedParts,
-        mode,
-        duration: Math.round(elapsedMs / 1000),
-      },
-    });
-
-    await ingestUsageForMessage({
-      messageId: assistantMessage.id,
-      status: "complete",
-    });
-
-    const doneEvent: ChatStreamEvent = {
-      type: "done",
-      messageId: assistantMessage.id,
-      durationMs: elapsedMs,
-    };
-
-    await stream.writeSSE({
-      event: "done",
-      data: JSON.stringify(doneEvent),
-    });
-  } catch (error) {
-    if (abortController.signal.aborted) {
-      await persistInterruptedMessageAndUsage();
-      return;
-    }
-
-    const message = error instanceof Error ? error.message : String(error);
-
-    await db.message.create({
-      data: {
-        sessionId,
-        role: "ERROR",
-        status: MessageStatus.COMPLETE,
-        model,
-        content: message,
-        mode,
-      },
-    });
-
-    const errorEvent: ChatStreamEvent = {
-      type: "error",
-      message,
-    };
-
-    await stream.writeSSE({
-      event: "error",
-      data: JSON.stringify(errorEvent),
-    });
-  }
-}
-
-const app = new Hono<AuthenticatedEnv>()
-  .post("/:sessionId", requireCredits, submitValidator, async (c) => {
-    const sessionId = c.req.param("sessionId");
+const app = new Hono<AuthenticatedEnv>().post(
+  "/",
+  requireCredits,
+  submitValidator,
+  async (c) => {
     const userId = c.get("userId");
+    const { id, messages, mode, model } = c.req.valid("json");
 
     const session = await db.session.findUnique({
-      where: { id: sessionId, userId },
-      include: { messages: { orderBy: { createdAt: "asc" } } },
-    });
-
-    if (!session) {
-      return c.json(
-        {
-          error: "Session not found",
-        },
-        404,
-      );
-    }
-
-    const data = c.req.valid("json");
-
-    await db.message.create({
-      data: {
-        sessionId,
-        role: "USER",
-        status: MessageStatus.COMPLETE,
-        model: data.model,
-        content: data.content,
-        mode: data.mode,
-      },
-    });
-
-    const history = buildConversationHistory([
-      ...session.messages,
-      {
-        role: "USER" as const,
-        status: MessageStatus.COMPLETE,
-        content: data.content,
-      },
-    ]);
-
-    const abortController = new AbortController();
-
-    return streamSSE(
-      c,
-      async (stream) => {
-        stream.onAbort(() => {
-          abortController.abort();
-        });
-
-        await streamAIResponse(stream, {
-          sessionId,
-          userId,
-          mode: data.mode,
-          model: data.model,
-          history,
-          abortController,
-          cwd: session.cwd,
-        });
-      },
-      async (err, stream) => {
-        const message = err instanceof Error ? err.message : String(err);
-        const errorEvent: ChatStreamEvent = {
-          type: "error",
-          message,
-        };
-
-        await stream.writeSSE({
-          event: "error",
-          data: JSON.stringify(errorEvent),
-        });
-      },
-    );
-  })
-  .post("/:sessionId/resume", async (c) => {
-    const sessionId = c.req.param("sessionId");
-    const userId = c.get("userId");
-
-    const session = await db.session.findUnique({
-      where: { id: sessionId, userId },
-      include: { messages: { orderBy: { createdAt: "asc" } } },
+      where: { id, userId },
     });
 
     if (!session) {
       return c.json({ error: "Session not found" }, 404);
     }
 
-    const resumableMessage = getResumableUserMessage(session.messages);
-    if (!resumableMessage) {
-      return c.json(
-        {
-          error: "Session has no pending user messages to resume",
-        },
-        409,
+    const startTime = Date.now();
+    const tools = getToolContracts(mode);
+    const resolvedModel = resolveChatModel(model);
+    const prevMessages = Array.isArray(session.messages)
+      ? (session.messages as unknown as ZenocodeUIMessage[])
+      : [];
+
+    const mergedMessages = [...prevMessages];
+
+    for (const msg of messages) {
+      const incomingMessage = {
+        ...msg,
+        metadata: { ...msg.metadata, mode, model },
+      } satisfies ZenocodeUIMessage;
+
+      const existingMessageIndex = mergedMessages.findIndex(
+        (m) => m.id === incomingMessage.id,
       );
+
+      if (existingMessageIndex === -1) {
+        mergedMessages.push(incomingMessage);
+      } else {
+        mergedMessages[existingMessageIndex] = incomingMessage;
+      }
     }
 
-    if (!isSupportedChatModel(resumableMessage.model)) {
-      return c.json(
-        {
-          error: `Session uses unsupported chat model:${resumableMessage.model}`,
-        },
-        409,
-      );
-    }
+    const nextMessages = await validateUIMessages<ZenocodeUIMessage>({
+      messages: mergedMessages,
+      tools,
+    });
 
-    if (activeResumeSessionIds.has(sessionId)) {
-      return c.json({ error: "Session is already being resumed" }, 409);
-    }
+    const modelMessages = await convertToModelMessages(nextMessages, { tools });
+    let completedUsage: LanguageModelUsage | null = null;
 
-    activeResumeSessionIds.add(sessionId);
+    const result = streamText({
+      model: resolvedModel.model,
+      system: buildSystemPrompt({ mode }),
+      messages: modelMessages,
+      tools,
+      providerOptions: resolvedModel.providerOptions,
+      onFinish(event) {
+        completedUsage = event.usage;
+      },
+    });
 
-    const history = buildConversationHistory(session.messages);
-    const abortController = new AbortController();
+    return result.toUIMessageStreamResponse<ZenocodeUIMessage>({
+      originalMessages: nextMessages,
+      messageMetadata({ part }) {
+        if (part.type === "start") {
+          return { mode, model };
+        }
 
-    try {
-      return streamSSE(
-        c,
-        async (stream) => {
-          stream.onAbort(() => {
-            abortController.abort();
+        if (part.type !== "finish") return undefined;
+
+        return {
+          mode,
+          model,
+          durationMs: Date.now() - startTime,
+          ...(completedUsage ? { usage: completedUsage } : {}),
+        };
+      },
+      async onFinish(event) {
+        if (event.isAborted) return;
+
+        if (hasPendingToolCalls(event.responseMessage)) return;
+
+        await db.session.update({
+          where: { id, userId },
+          data: {
+            messages: event.messages as unknown as Prisma.InputJsonValue,
+          },
+        });
+
+        if (!completedUsage) return;
+
+        try {
+          const billableUsage = calculateCreditsForUsage({
+            provider: resolvedModel.provider,
+            model: resolvedModel.modelId,
+            usage: completedUsage,
           });
 
-          try {
-            await streamAIResponse(stream, {
-              sessionId,
-              userId,
-              model: resumableMessage.model,
-              history,
-              mode: resumableMessage.mode,
-              abortController,
-              cwd: session.cwd,
-            });
-          } finally {
-            activeResumeSessionIds.delete(sessionId);
-          }
-        },
-        async (err, stream) => {
-          activeResumeSessionIds.delete(sessionId);
-          const message = err instanceof Error ? err.message : String(err);
-          const errorEvent: ChatStreamEvent = {
-            type: "error",
-            message,
-          };
-
-          await stream.writeSSE({
-            event: "error",
-            data: JSON.stringify(errorEvent),
+          await IngestAIUsage({
+            externalCustomerId: userId,
+            eventId: `chat-message:${event.responseMessage.id}`,
+            credits: billableUsage.credits,
           });
-        },
-      );
-    } catch (error) {
-      activeResumeSessionIds.delete(sessionId);
-      throw error;
-    }
-  });
+        } catch (error) {
+          console.log(error);
+        }
+      },
+      onError(error) {
+        return error instanceof Error ? error.message : String(error);
+      },
+    });
+  },
+);
 
 export default app;

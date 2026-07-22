@@ -1,7 +1,7 @@
 import { TextAttributes } from "@opentui/core";
 import { useTheme } from "../providers/theme";
 import { usePromptConfig } from "../providers/prompt-config";
-import { Mode } from "@zenocode/database/enums";
+import { Mode } from "@zenocode/shared";
 
 export function StatusBar() {
   const { colors } = useTheme();

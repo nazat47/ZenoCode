@@ -22,7 +22,7 @@ import { useDialog } from "../providers/dialog";
 import { useTheme } from "../providers/theme";
 import { useNavigate } from "react-router";
 import { usePromptConfig } from "../providers/prompt-config";
-import { Mode } from "@zenocode/database/enums";
+import { Mode } from "@zenocode/shared";
 import { relative, resolve, isAbsolute } from "node:path";
 import { readdir } from "node:fs/promises";
 
