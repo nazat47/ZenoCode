@@ -12,7 +12,7 @@ export const requiredAuth = createMiddleware<AuthenticatedEnv>(
     try {
       const auth = await authenticateOAuthRequest(c.req.raw);
       if (!auth) {
-        return c.json({ error: "Unauthorized, login to continue" });
+        return c.json({ error: "Unauthorized, login to continue" }, 401);
       }
 
       c.set("userId", auth.userId);

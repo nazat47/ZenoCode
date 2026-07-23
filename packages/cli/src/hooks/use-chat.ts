@@ -38,7 +38,7 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
       api: apiClient.chat.$url().toString(),
       headers() {
         const auth = getAuth();
-        return auth ? { Authorization: `Bearer ${auth}` } : new Headers();
+        return auth ? { Authorization: `Bearer ${auth.token}` } : new Headers();
       },
       prepareSendMessagesRequest({ messages }) {
         const message = messages[messages.length - 1];

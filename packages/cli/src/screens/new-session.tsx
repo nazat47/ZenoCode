@@ -65,7 +65,7 @@ const NewSession = () => {
           message:
             error instanceof Error ? error.message : "Failed to create session",
         });
-        navigate("/");
+        navigate("/", { replace: true });
       }
     };
 

@@ -4,6 +4,9 @@
   "workspaces": {
     "": {
       "name": "zenocode",
+      "dependencies": {
+        "dotenv": "^17.4.2",
+      },
     },
     "packages/cli": {
       "name": "@zenocode/cli",
